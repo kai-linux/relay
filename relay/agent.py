@@ -104,15 +104,15 @@ class FallbackAgent(AgentBackend):
 
 
 _TOOL_LABELS = {
-    "Read": "Reading files",
-    "Write": "Writing code",
-    "Edit": "Editing code",
-    "Bash": "Running a command",
-    "Grep": "Searching the codebase",
-    "Glob": "Finding files",
-    "Agent": "Delegating to a sub-agent",
-    "WebFetch": "Fetching a web page",
-    "WebSearch": "Searching the web",
+    "Read": "I'm reading through the files now",
+    "Write": "I'm writing some code",
+    "Edit": "I'm making some edits",
+    "Bash": "I'm running a command",
+    "Grep": "I'm searching the codebase",
+    "Glob": "I'm looking for the right files",
+    "Agent": "I'm kicking off a sub-task",
+    "WebFetch": "I'm pulling up a web page",
+    "WebSearch": "I'm searching the web for that",
 }
 
 
@@ -226,17 +226,23 @@ class ClaudeCodeAgent(AgentBackend):
 
     @staticmethod
     def _extract_status(msg: dict, seen_tools: set[str]) -> str | None:
-        msg_type = msg.get("type")
+        # stream-json wraps content inside {"type": "assistant", "message": {"content": [...]}}
+        if msg.get("type") != "assistant":
+            return None
 
-        if msg_type == "assistant" and msg.get("subtype") == "thinking":
-            return "Thinking..."
+        content = msg.get("message", {}).get("content", [])
+        for part in content:
+            part_type = part.get("type")
 
-        if msg_type == "tool_use":
-            tool = msg.get("tool", "")
-            if tool in seen_tools:
-                return None
-            seen_tools.add(tool)
-            return _TOOL_LABELS.get(tool, f"Using {tool}")
+            if part_type == "thinking":
+                return "Let me think about this..."
+
+            if part_type == "tool_use":
+                tool = part.get("name", "")
+                if tool in seen_tools:
+                    continue
+                seen_tools.add(tool)
+                return _TOOL_LABELS.get(tool, f"I'm using {tool}")
 
         return None
 

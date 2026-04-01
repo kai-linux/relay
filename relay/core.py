@@ -89,7 +89,7 @@ class Relay:
         Agent events and TTS synthesis run concurrently via an asyncio.Queue
         so that TTS latency never blocks reading the next agent event.
         """
-        yield RelayEvent(event="status", text="Transcribing your voice...")
+        yield RelayEvent(event="status", text="Let me listen to that...")
 
         transcript = await self.stt.transcribe(audio_data, mime_type)
 
@@ -105,7 +105,7 @@ class Relay:
             return
 
         yield RelayEvent(event="transcript", text=transcript)
-        yield RelayEvent(event="status", text="Agent is working...")
+        yield RelayEvent(event="status", text="On it, give me a moment...")
 
         # Queue bridges the agent stream reader and the event yielder.
         # None sentinel signals all work (agent + TTS) is done.
@@ -156,10 +156,10 @@ class Relay:
                 await asyncio.gather(*tts_tasks, return_exceptions=True)
             await queue.put(None)
 
-        # Synthesize "Agent is working..." immediately so the user hears
+        # Synthesize the initial status immediately so the user hears
         # something right away, before the CLI even starts up.
         initial_tts = asyncio.create_task(
-            _synthesize_status("Agent is working...")
+            _synthesize_status("On it, give me a moment...")
         )
         tts_tasks.append(initial_tts)
 
@@ -177,7 +177,7 @@ class Relay:
         await agent_task
 
         yield RelayEvent(event="response", text=response_text)
-        yield RelayEvent(event="status", text="Generating speech...")
+        yield RelayEvent(event="status", text="Let me put that into words...")
 
         async for chunk in self.tts.synthesize_stream(response_text):
             yield RelayEvent(

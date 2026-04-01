@@ -296,9 +296,15 @@ class RelayClient {
             }
 
             await this.handleStream(res);
-        } catch {
-            this.addMessage("error", "Connection failed. Is the server running?");
-            this.setState("ready");
+        } catch (err) {
+            // Browser aborts fetch when app is backgrounded / switched —
+            // not a real server failure, just silently reset.
+            if (err.name === "AbortError" || err.name === "TypeError") {
+                this.setState("ready");
+            } else {
+                this.addMessage("error", "Connection lost. Tap to try again.");
+                this.setState("ready");
+            }
         }
     }
 

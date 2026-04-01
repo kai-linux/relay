@@ -182,12 +182,21 @@ class Relay:
         # Make sure the agent task is fully done
         await agent_task
 
+        if not response_text:
+            log.warning("Agent finished but produced no response text")
+            response_text = "I finished working, but I wasn't able to generate a summary."
+
+        log.info("Agent done, response length=%d chars", len(response_text))
         yield RelayEvent(event="response", text=response_text)
         yield RelayEvent(event="status", text="Let me put that into words...")
 
-        async for chunk in self.tts.synthesize_stream(response_text):
-            yield RelayEvent(
-                event="audio",
-                audio_base64=base64.b64encode(chunk).decode(),
-                session_id=session_id,
-            )
+        try:
+            async for chunk in self.tts.synthesize_stream(response_text):
+                yield RelayEvent(
+                    event="audio",
+                    audio_base64=base64.b64encode(chunk).decode(),
+                    session_id=session_id,
+                )
+        except Exception as e:
+            log.error("TTS failed for response: %s", e)
+            yield RelayEvent(event="error", text="Speech synthesis failed.")

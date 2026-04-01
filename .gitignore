@@ -1,5 +1,6 @@
 # relay
 .certs/
+INSTALL.local.md
 *.log
 # Byte-compiled / optimized / DLL files
 __pycache__/

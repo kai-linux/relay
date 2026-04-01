@@ -121,16 +121,10 @@ class ClaudeCodeAgent(AgentBackend):
         self.timeout = timeout
         self._started_sessions: set[str] = set()
 
-    def _build_cmd(self, message: str, session_id: str) -> list[str]:
-        if session_id in self._started_sessions:
-            mode_flag = "-c"
-        else:
-            mode_flag = "-p"
-            self._started_sessions.add(session_id)
-
+    def _build_cmd(self, message: str, continue_mode: bool) -> list[str]:
         return [
             "claude",
-            mode_flag,
+            "-c" if continue_mode else "-p",
             "--dangerously-skip-permissions",
             "--verbose",
             "--output-format", "stream-json",
@@ -148,7 +142,8 @@ class ClaudeCodeAgent(AgentBackend):
     async def send_stream(
         self, message: str, session_id: str
     ) -> AsyncIterator[AgentEvent]:
-        cmd = self._build_cmd(message, session_id)
+        continue_mode = session_id in self._started_sessions
+        cmd = self._build_cmd(message, continue_mode)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -207,12 +202,22 @@ class ClaudeCodeAgent(AgentBackend):
 
         await proc.wait()
 
-        if not result_text:
+        # If -c failed (no prior conversation), fall back to -p
+        if not result_text and proc.returncode != 0 and continue_mode:
+            stderr_out = await proc.stderr.read()
+            log.info("Continue failed (%s), starting new conversation",
+                     stderr_out.decode().strip()[:100])
+            self._started_sessions.discard(session_id)
+            async for event in self.send_stream(message, session_id):
+                yield event
+            return
+
+        if not result_text and proc.returncode != 0:
             stderr_out = await proc.stderr.read()
             err = stderr_out.decode().strip()
-            if proc.returncode != 0:
-                raise AgentError(err or f"exit code {proc.returncode}")
+            raise AgentError(err or f"exit code {proc.returncode}")
 
+        self._started_sessions.add(session_id)
         yield AgentEvent(type="result", text=result_text)
 
     @staticmethod
@@ -240,22 +245,20 @@ class CodexAgent(AgentBackend):
         self.timeout = timeout
         self._started_sessions: set[str] = set()
 
-    def _build_cmd(self, message: str, session_id: str) -> list[str]:
-        if session_id in self._started_sessions:
+    def _build_cmd(self, message: str, continue_mode: bool) -> list[str]:
+        if continue_mode:
             return [
                 "codex", "exec", "resume", "--last",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--json",
                 message,
             ]
-        else:
-            self._started_sessions.add(session_id)
-            return [
-                "codex", "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--json",
-                message,
-            ]
+        return [
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--json",
+            message,
+        ]
 
     async def send(self, message: str, session_id: str) -> str:
         result = ""
@@ -267,7 +270,8 @@ class CodexAgent(AgentBackend):
     async def send_stream(
         self, message: str, session_id: str
     ) -> AsyncIterator[AgentEvent]:
-        cmd = self._build_cmd(message, session_id)
+        continue_mode = session_id in self._started_sessions
+        cmd = self._build_cmd(message, continue_mode)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -313,7 +317,6 @@ class CodexAgent(AgentBackend):
                 if status:
                     yield AgentEvent(type="status", text=status)
 
-                # Codex emits the final message as the last assistant message
                 if msg.get("type") == "message" and msg.get("role") == "assistant":
                     content = msg.get("content", [])
                     for part in content:
@@ -329,12 +332,22 @@ class CodexAgent(AgentBackend):
 
         await proc.wait()
 
-        if not result_text:
+        # If resume --last failed (no prior session), fall back to plain exec
+        if not result_text and proc.returncode != 0 and continue_mode:
+            stderr_out = await proc.stderr.read()
+            log.info("Codex resume failed (%s), starting new session",
+                     stderr_out.decode().strip()[:100])
+            self._started_sessions.discard(session_id)
+            async for event in self.send_stream(message, session_id):
+                yield event
+            return
+
+        if not result_text and proc.returncode != 0:
             stderr_out = await proc.stderr.read()
             err = stderr_out.decode().strip()
-            if proc.returncode != 0:
-                raise AgentError(err or f"exit code {proc.returncode}")
+            raise AgentError(err or f"exit code {proc.returncode}")
 
+        self._started_sessions.add(session_id)
         yield AgentEvent(type="result", text=result_text)
 
     @staticmethod

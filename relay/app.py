@@ -5,7 +5,7 @@ import uuid
 
 from quart import Quart, jsonify, request
 
-from .agent import ClaudeCodeAgent
+from .agent import ClaudeCodeAgent, CodexAgent
 from .config import Config
 from .core import Relay
 from .stt import WhisperSTT
@@ -68,7 +68,21 @@ def create_app_from_config(config: Config | None = None) -> Quart:
         model=config.tts_model,
         voice=config.tts_voice,
     )
-    agent = ClaudeCodeAgent(work_dir=config.work_dir, timeout=config.agent_timeout)
+    agents = {
+        "claude-code": ClaudeCodeAgent,
+        "codex": CodexAgent,
+    }
+    agent_cls = agents.get(config.agent_backend)
+    if not agent_cls:
+        raise ValueError(
+            f"Unknown agent backend '{config.agent_backend}'. "
+            f"Choose from: {', '.join(agents)}"
+        )
+    agent = agent_cls(
+        work_dir=config.work_dir,
+        timeout=config.agent_timeout,
+        skip_permissions=config.agent_skip_permissions,
+    )
     relay = Relay(stt=stt, tts=tts, agent=agent)
 
     return create_app(relay, config)

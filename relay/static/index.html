@@ -38,7 +38,7 @@
         .speaking-bar:nth-child(4) { animation-delay: 0.1s; }
     </style>
 </head>
-<body class="bg-zinc-950 text-white flex flex-col select-none">
+<body class="bg-zinc-950 text-white flex flex-col">
 
     <!-- Header -->
     <header class="shrink-0 px-6 pt-4 pb-2">
@@ -64,7 +64,7 @@
             <button
                 id="record-btn"
                 class="relative w-24 h-24 rounded-full bg-zinc-800 border-2 border-zinc-700 flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none"
-                aria-label="Record"
+                aria-label="Record" style="user-select:none;-webkit-user-select:none"
             >
                 <!-- Mic icon -->
                 <svg id="icon-mic" class="w-10 h-10 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

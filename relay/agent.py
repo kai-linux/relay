@@ -132,6 +132,7 @@ class ClaudeCodeAgent(AgentBackend):
             "claude",
             mode_flag,
             "--dangerously-skip-permissions",
+            "--verbose",
             "--output-format", "stream-json",
             "--append-system-prompt", VOICE_SYSTEM_PROMPT,
             message,
@@ -152,6 +153,7 @@ class ClaudeCodeAgent(AgentBackend):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=self.work_dir,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -270,6 +272,7 @@ class CodexAgent(AgentBackend):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=self.work_dir,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

@@ -11,8 +11,10 @@ class RelayClient {
         this.state = "init";
         this.handsFree = false;
         this.vad = null;
-        this._keepAliveAudio = null;
         this._keepAliveCtx = null;
+        this._keepAliveSrc = null;
+        this._lockHeld = false;
+        this._releaseLock = null;
 
         this.els = {
             btn: document.getElementById("record-btn"),
@@ -162,24 +164,26 @@ class RelayClient {
     }
 
     // ── Background keep-alive ────────────────────────────────────
+    // Prevents Android/iOS from suspending the tab (and killing the
+    // fetch stream) when the user switches apps or locks the screen.
+    //
+    // Two mechanisms:
+    //  1. Silent AudioContext loop — an active audio context is the
+    //     strongest "this tab is doing something" signal to Chrome.
+    //     Must be created during a user gesture, so we init it on the
+    //     first button press, NOT on visibilitychange.
+    //  2. Web Lock API — explicitly tells the browser not to freeze
+    //     this tab while we hold the lock.
 
     setupKeepAlive() {
-        // Play a silent audio loop to prevent iOS/Android from suspending
-        // the tab when it's in the background or screen is off.
-        document.addEventListener("visibilitychange", () => {
-            if (document.hidden) {
-                this._startKeepAlive();
-            } else {
-                this._stopKeepAlive();
-            }
-        });
+        // Nothing here — the AudioContext is created lazily on first
+        // user interaction (see _ensureKeepAliveCtx).
     }
 
-    _startKeepAlive() {
+    _ensureKeepAliveCtx() {
         if (this._keepAliveCtx) return;
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            // Generate a tiny silent buffer
             const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
             const src = ctx.createBufferSource();
             src.buffer = buf;
@@ -189,19 +193,38 @@ class RelayClient {
             this._keepAliveCtx = ctx;
             this._keepAliveSrc = src;
         } catch {
-            // Non-critical — best-effort keep-alive
+            // Non-critical — best-effort
         }
     }
 
-    _stopKeepAlive() {
-        if (this._keepAliveSrc) {
-            try { this._keepAliveSrc.stop(); } catch {}
-            this._keepAliveSrc = null;
+    _acquireKeepAlive() {
+        // Audio: resume the context (may have been suspended by the OS)
+        this._ensureKeepAliveCtx();
+        if (this._keepAliveCtx && this._keepAliveCtx.state === "suspended") {
+            this._keepAliveCtx.resume().catch(() => {});
         }
-        if (this._keepAliveCtx) {
-            try { this._keepAliveCtx.close(); } catch {}
-            this._keepAliveCtx = null;
+
+        // Web Lock: hold a lock for the duration of the active request
+        if (!this._lockHeld && navigator.locks) {
+            this._lockHeld = true;
+            navigator.locks.request("relay-active", () => {
+                // This promise resolves when we release — park it until then
+                return new Promise((resolve) => {
+                    this._releaseLock = resolve;
+                });
+            }).catch(() => {});
         }
+    }
+
+    _releaseKeepAlive() {
+        // Release the Web Lock
+        if (this._releaseLock) {
+            this._releaseLock();
+            this._releaseLock = null;
+            this._lockHeld = false;
+        }
+        // Keep the AudioContext alive — it's cheap and avoids re-creation
+        // issues. We just let it play silence indefinitely.
     }
 
     // ── Core recording / playback ────────────────────────────────
@@ -241,6 +264,8 @@ class RelayClient {
 
     startRecording() {
         if (!this.mediaRecorder) return;
+        // First user gesture — init the AudioContext for keep-alive
+        this._ensureKeepAliveCtx();
         this.audioChunks = [];
         this.mediaRecorder.start();
         this.setState("recording");
@@ -281,6 +306,9 @@ class RelayClient {
         form.append("audio", blob, `recording.${ext}`);
         form.append("session_id", this.sessionId);
 
+        // Keep the tab alive while the request is in flight
+        this._acquireKeepAlive();
+
         try {
             const res = await fetch("/api/relay", {
                 method: "POST",
@@ -305,6 +333,8 @@ class RelayClient {
                 this.addMessage("error", "Connection lost. Tap to try again.");
                 this.setState("ready");
             }
+        } finally {
+            this._releaseKeepAlive();
         }
     }
 

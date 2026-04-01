@@ -4,13 +4,17 @@ This module contains the provider-agnostic orchestration logic. It can be
 used standalone (embedded in another app) or served over HTTP via relay.app.
 """
 
+import asyncio
 import base64
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from .agent import AgentBackend
 from .stt import STTProvider
 from .tts import TTSProvider
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,9 +86,8 @@ class Relay:
     ) -> AsyncIterator[RelayEvent]:
         """Stream events through the pipeline for real-time client updates.
 
-        Status updates are synthesized to short audio clips so the user
-        *hears* progress ("Reading files...", "Editing code...") instead
-        of sitting in silence.
+        Agent events and TTS synthesis run concurrently via an asyncio.Queue
+        so that TTS latency never blocks reading the next agent event.
         """
         yield RelayEvent(event="status", text="Transcribing your voice...")
 
@@ -104,22 +107,62 @@ class Relay:
         yield RelayEvent(event="transcript", text=transcript)
         yield RelayEvent(event="status", text="Agent is working...")
 
+        # Queue bridges the agent stream reader and the event yielder.
+        # None sentinel signals the agent task is done.
+        queue: asyncio.Queue[RelayEvent | None] = asyncio.Queue()
         response_text = ""
-        async for agent_event in self.agent.send_stream(transcript, session_id):
-            if agent_event.type == "status":
-                yield RelayEvent(event="status", text=agent_event.text)
-                # Synthesize short status clip so the user hears progress
-                try:
-                    clip = await self.tts.synthesize(agent_event.text)
-                    yield RelayEvent(
-                        event="status_audio",
-                        text=agent_event.text,
-                        audio_base64=base64.b64encode(clip).decode(),
-                    )
-                except Exception:
-                    pass  # non-critical — text status was already sent
-            elif agent_event.type == "result":
-                response_text = agent_event.text
+
+        async def _read_agent_and_synthesize():
+            """Read agent events and fire off TTS for status updates."""
+            nonlocal response_text
+            try:
+                async for agent_event in self.agent.send_stream(
+                    transcript, session_id
+                ):
+                    if agent_event.type == "status":
+                        # Push text status immediately (no blocking)
+                        await queue.put(
+                            RelayEvent(event="status", text=agent_event.text)
+                        )
+                        # Synthesize audio in a background task so we don't
+                        # block reading the next agent event
+                        asyncio.create_task(
+                            _synthesize_status(agent_event.text)
+                        )
+                    elif agent_event.type == "result":
+                        response_text = agent_event.text
+            except Exception as e:
+                log.error("Agent stream error: %s", e)
+                await queue.put(
+                    RelayEvent(event="error", text=str(e))
+                )
+            finally:
+                await queue.put(None)
+
+        async def _synthesize_status(text: str):
+            """TTS a short status clip and push to queue."""
+            try:
+                clip = await self.tts.synthesize(text)
+                await queue.put(RelayEvent(
+                    event="status_audio",
+                    text=text,
+                    audio_base64=base64.b64encode(clip).decode(),
+                ))
+            except Exception:
+                pass  # non-critical
+
+        # Start the agent reader — it runs concurrently while we yield
+        agent_task = asyncio.create_task(_read_agent_and_synthesize())
+
+        # Yield events as they arrive from the queue
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield event
+
+        # Make sure the agent task is fully done
+        await agent_task
 
         yield RelayEvent(event="response", text=response_text)
         yield RelayEvent(event="status", text="Generating speech...")

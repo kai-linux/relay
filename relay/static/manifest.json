@@ -1,0 +1,11 @@
+{
+    "name": "relay",
+    "short_name": "relay",
+    "description": "Voice bridge to CLI AI agents",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#09090b",
+    "theme_color": "#09090b",
+    "orientation": "portrait",
+    "icons": []
+}

@@ -111,9 +111,15 @@ class RelayClient {
     }
 
     stopPlayback() {
+        this.responseQueue = [];
+        this.statusQueue = [];
         if (this.currentAudio) {
             this.currentAudio.pause();
             this.currentAudio = null;
+        }
+        if (this.currentStatusAudio) {
+            this.currentStatusAudio.pause();
+            this.currentStatusAudio = null;
         }
         this.setState("ready");
     }
@@ -154,6 +160,8 @@ class RelayClient {
     }
 
     async handleStream(res) {
+        this.receivedResponseAudio = false;
+        this.responseQueue = [];
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -192,14 +200,17 @@ class RelayClient {
                         this.addMessage("assistant", event.text);
                         break;
                     case "audio":
-                        // Final response audio — interrupt any status clips
-                        this.statusQueue = [];
-                        if (this.currentStatusAudio) {
-                            this.currentStatusAudio.pause();
-                            this.currentStatusAudio = null;
+                        // Response audio chunk — interrupt status clips on first chunk
+                        if (!this.receivedResponseAudio) {
+                            this.receivedResponseAudio = true;
+                            this.statusQueue = [];
+                            if (this.currentStatusAudio) {
+                                this.currentStatusAudio.pause();
+                                this.currentStatusAudio = null;
+                            }
                         }
-                        this.playAudio(event.audio_base64);
-                        return;
+                        this.queueResponseClip(event.audio_base64);
+                        break;
                     case "error":
                         this.addMessage("error", event.text);
                         this.setState("ready");
@@ -208,8 +219,10 @@ class RelayClient {
             }
         }
 
-        // Stream ended without final audio
-        if (this.state !== "speaking") this.setState("ready");
+        // Stream ended — if we got response audio, make sure it plays out
+        if (!this.receivedResponseAudio && this.state !== "speaking") {
+            this.setState("ready");
+        }
     }
 
     queueStatusClip(base64Data) {
@@ -231,22 +244,29 @@ class RelayClient {
         audio.play().catch(() => this.playNextStatusClip());
     }
 
-    playAudio(base64Data) {
+    queueResponseClip(base64Data) {
+        if (!this.responseQueue) this.responseQueue = [];
+        this.responseQueue.push(base64Data);
+        if (!this.currentAudio) this.playNextResponseClip();
+    }
+
+    playNextResponseClip() {
+        if (!this.responseQueue || this.responseQueue.length === 0) {
+            this.currentAudio = null;
+            this.setState("ready");
+            return;
+        }
         this.setState("speaking");
-        const audio = new Audio(`data:audio/mp3;base64,${base64Data}`);
+        const clip = this.responseQueue.shift();
+        const audio = new Audio(`data:audio/mp3;base64,${clip}`);
         this.currentAudio = audio;
-        audio.onended = () => {
-            this.currentAudio = null;
-            this.setState("ready");
-        };
-        audio.onerror = () => {
-            this.currentAudio = null;
-            this.setState("ready");
-        };
-        audio.play().catch(() => {
-            this.currentAudio = null;
-            this.setState("ready");
-        });
+        audio.onended = () => this.playNextResponseClip();
+        audio.onerror = () => this.playNextResponseClip();
+        audio.play().catch(() => this.playNextResponseClip());
+    }
+
+    playAudio(base64Data) {
+        this.queueResponseClip(base64Data);
     }
 
     addMessage(role, text) {

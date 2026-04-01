@@ -124,9 +124,9 @@ class Relay:
         yield RelayEvent(event="response", text=response_text)
         yield RelayEvent(event="status", text="Generating speech...")
 
-        audio_out = await self.tts.synthesize(response_text)
-        yield RelayEvent(
-            event="audio",
-            audio_base64=base64.b64encode(audio_out).decode(),
-            session_id=session_id,
-        )
+        async for chunk in self.tts.synthesize_stream(response_text):
+            yield RelayEvent(
+                event="audio",
+                audio_base64=base64.b64encode(chunk).decode(),
+                session_id=session_id,
+            )

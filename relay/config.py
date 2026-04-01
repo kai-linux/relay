@@ -33,7 +33,9 @@ class Config:
         default_factory=lambda: os.environ.get("RELAY_AGENT_BACKEND", "claude-code")
     )
     work_dir: str = field(
-        default_factory=lambda: os.environ.get("RELAY_WORK_DIR", os.getcwd())
+        default_factory=lambda: os.environ.get(
+            "RELAY_WORK_DIR", os.path.expanduser("~")
+        )
     )
     agent_timeout: int = field(
         default_factory=lambda: int(os.environ.get("RELAY_AGENT_TIMEOUT", "300"))

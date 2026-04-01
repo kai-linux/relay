@@ -63,11 +63,9 @@ class FallbackAgent(AgentBackend):
 class ClaudeCodeAgent(AgentBackend):
     """Runs Claude Code CLI as a subprocess."""
 
-    def __init__(self, work_dir: str = ".", timeout: int = 300,
-                 skip_permissions: bool = False):
+    def __init__(self, work_dir: str = ".", timeout: int = 300):
         self.work_dir = work_dir
         self.timeout = timeout
-        self.skip_permissions = skip_permissions
         self._started_sessions: set[str] = set()
 
     async def send(self, message: str, session_id: str) -> str:
@@ -82,12 +80,11 @@ class ClaudeCodeAgent(AgentBackend):
         cmd = [
             "claude",
             mode_flag,
+            "--dangerously-skip-permissions",
             "--output-format", "text",
             "--append-system-prompt", VOICE_SYSTEM_PROMPT,
+            message,
         ]
-        if self.skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
-        cmd.append(message)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -117,17 +114,27 @@ class ClaudeCodeAgent(AgentBackend):
 class CodexAgent(AgentBackend):
     """Runs OpenAI Codex CLI as a subprocess."""
 
-    def __init__(self, work_dir: str = ".", timeout: int = 300,
-                 skip_permissions: bool = False):
+    def __init__(self, work_dir: str = ".", timeout: int = 300):
         self.work_dir = work_dir
         self.timeout = timeout
-        self.skip_permissions = skip_permissions
+        self._started_sessions: set[str] = set()
 
     async def send(self, message: str, session_id: str) -> str:
-        cmd = ["codex", "--quiet"]
-        if self.skip_permissions:
-            cmd.extend(["--approval-mode", "full-auto"])
-        cmd.extend(["--prompt", message])
+        # First message: codex exec (new conversation)
+        # Subsequent messages: codex exec resume --last (continue)
+        if session_id in self._started_sessions:
+            cmd = [
+                "codex", "exec", "resume", "--last",
+                "--dangerously-bypass-approvals-and-sandbox",
+                message,
+            ]
+        else:
+            self._started_sessions.add(session_id)
+            cmd = [
+                "codex", "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                message,
+            ]
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

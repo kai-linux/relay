@@ -1,9 +1,10 @@
 """Quart web application — thin HTTP layer over the Relay core."""
 
 import base64
+import json
 import uuid
 
-from quart import Quart, jsonify, request
+from quart import Quart, jsonify, request, Response
 
 from .agent import ClaudeCodeAgent, CodexAgent, FallbackAgent
 from .config import Config
@@ -33,7 +34,11 @@ def create_app(relay: Relay, config: Config | None = None) -> Quart:
 
     @app.route("/api/relay", methods=["POST"])
     async def relay_endpoint():
-        """Voice relay: audio in -> transcribe -> agent -> TTS -> audio out."""
+        """Voice relay: audio in -> transcribe -> agent -> TTS -> audio out.
+
+        Streams newline-delimited JSON events for real-time progress updates.
+        Falls back to single JSON response if client doesn't accept NDJSON.
+        """
         files = await request.files
         audio_file = files.get("audio")
         if not audio_file:
@@ -44,6 +49,12 @@ def create_app(relay: Relay, config: Config | None = None) -> Quart:
         audio_data = audio_file.read()
         mime_type = audio_file.content_type or "audio/webm"
 
+        accept = request.headers.get("Accept", "")
+
+        if "text/event-stream" in accept:
+            return await _stream_response(relay, audio_data, session_id, mime_type)
+
+        # Legacy non-streaming path
         result = await relay.process(audio_data, session_id, mime_type)
 
         return jsonify(
@@ -54,6 +65,27 @@ def create_app(relay: Relay, config: Config | None = None) -> Quart:
                 "session_id": session_id,
             }
         )
+
+    async def _stream_response(relay, audio_data, session_id, mime_type):
+        """Stream NDJSON events through the pipeline."""
+
+        async def generate():
+            try:
+                async for event in relay.process_stream(
+                    audio_data, session_id, mime_type
+                ):
+                    payload = {"event": event.event}
+                    if event.text:
+                        payload["text"] = event.text
+                    if event.audio_base64:
+                        payload["audio_base64"] = event.audio_base64
+                    if event.session_id:
+                        payload["session_id"] = event.session_id
+                    yield json.dumps(payload) + "\n"
+            except Exception as e:
+                yield json.dumps({"event": "error", "text": str(e)}) + "\n"
+
+        return Response(generate(), content_type="application/x-ndjson")
 
     @app.route("/api/health")
     async def health():
@@ -81,7 +113,6 @@ def _build_agent(config: Config):
         agents.append(cls(
             work_dir=config.work_dir,
             timeout=config.agent_timeout,
-            skip_permissions=config.agent_skip_permissions,
         ))
 
     if len(agents) == 1:

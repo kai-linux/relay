@@ -40,12 +40,6 @@ class Config:
     agent_timeout: int = field(
         default_factory=lambda: int(os.environ.get("RELAY_AGENT_TIMEOUT", "300"))
     )
-    agent_skip_permissions: bool = field(
-        default_factory=lambda: os.environ.get(
-            "RELAY_SKIP_PERMISSIONS", "false"
-        ).lower() in ("1", "true", "yes")
-    )
-
     # Server
     host: str = field(
         default_factory=lambda: os.environ.get("RELAY_HOST", "0.0.0.0")

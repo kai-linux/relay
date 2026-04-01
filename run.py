@@ -18,11 +18,17 @@ def ensure_venv():
     if sys.executable == VENV_PYTHON or sys.prefix != sys.base_prefix:
         return  # already running inside the venv
 
-    if not os.path.exists(VENV_PYTHON):
+    installed_marker = os.path.join(VENV_DIR, ".relay_installed")
+    if not os.path.exists(installed_marker):
+        # Clean slate if prior attempt left a broken venv
+        if os.path.exists(VENV_DIR):
+            import shutil
+            shutil.rmtree(VENV_DIR)
         print("Creating .venv ...")
         subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
         print("Installing relay into .venv ...")
         subprocess.check_call([VENV_PYTHON, "-m", "pip", "install", "-e", "."])
+        open(installed_marker, "w").close()
 
     # Re-exec this script inside the venv
     os.execv(VENV_PYTHON, [VENV_PYTHON, __file__] + sys.argv[1:])

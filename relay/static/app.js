@@ -133,7 +133,11 @@ class RelayClient {
         form.append("session_id", this.sessionId);
 
         try {
-            const res = await fetch("/api/relay", { method: "POST", body: form });
+            const res = await fetch("/api/relay", {
+                method: "POST",
+                body: form,
+                headers: { Accept: "text/event-stream" },
+            });
 
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
@@ -142,26 +146,89 @@ class RelayClient {
                 return;
             }
 
-            const data = await res.json();
-
-            if (data.error) {
-                this.addMessage("error", data.error);
-                this.setState("ready");
-                return;
-            }
-
-            if (data.transcript) this.addMessage("user", data.transcript);
-            if (data.response) this.addMessage("assistant", data.response);
-
-            if (data.audio_base64) {
-                this.playAudio(data.audio_base64);
-            } else {
-                this.setState("ready");
-            }
+            await this.handleStream(res);
         } catch {
             this.addMessage("error", "Connection failed. Is the server running?");
             this.setState("ready");
         }
+    }
+
+    async handleStream(res) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split("\n");
+            buffer = lines.pop(); // keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                let event;
+                try {
+                    event = JSON.parse(line);
+                } catch {
+                    continue;
+                }
+
+                switch (event.event) {
+                    case "status":
+                        this.els.status.textContent = event.text || "Working...";
+                        break;
+                    case "status_audio":
+                        this.els.status.textContent = event.text || "Working...";
+                        if (event.audio_base64) {
+                            this.queueStatusClip(event.audio_base64);
+                        }
+                        break;
+                    case "transcript":
+                        this.addMessage("user", event.text);
+                        break;
+                    case "response":
+                        this.addMessage("assistant", event.text);
+                        break;
+                    case "audio":
+                        // Final response audio — interrupt any status clips
+                        this.statusQueue = [];
+                        if (this.currentStatusAudio) {
+                            this.currentStatusAudio.pause();
+                            this.currentStatusAudio = null;
+                        }
+                        this.playAudio(event.audio_base64);
+                        return;
+                    case "error":
+                        this.addMessage("error", event.text);
+                        this.setState("ready");
+                        return;
+                }
+            }
+        }
+
+        // Stream ended without final audio
+        if (this.state !== "speaking") this.setState("ready");
+    }
+
+    queueStatusClip(base64Data) {
+        if (!this.statusQueue) this.statusQueue = [];
+        this.statusQueue.push(base64Data);
+        if (!this.currentStatusAudio) this.playNextStatusClip();
+    }
+
+    playNextStatusClip() {
+        if (!this.statusQueue || this.statusQueue.length === 0) {
+            this.currentStatusAudio = null;
+            return;
+        }
+        const clip = this.statusQueue.shift();
+        const audio = new Audio(`data:audio/mp3;base64,${clip}`);
+        this.currentStatusAudio = audio;
+        audio.onended = () => this.playNextStatusClip();
+        audio.onerror = () => this.playNextStatusClip();
+        audio.play().catch(() => this.playNextStatusClip());
     }
 
     playAudio(base64Data) {

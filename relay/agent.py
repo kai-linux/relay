@@ -68,11 +68,20 @@ class ClaudeCodeAgent(AgentBackend):
         self.work_dir = work_dir
         self.timeout = timeout
         self.skip_permissions = skip_permissions
+        self._started_sessions: set[str] = set()
 
     async def send(self, message: str, session_id: str) -> str:
+        # First message in a session: -p (new conversation)
+        # Subsequent messages: -c (continue most recent conversation)
+        if session_id in self._started_sessions:
+            mode_flag = "-c"
+        else:
+            mode_flag = "-p"
+            self._started_sessions.add(session_id)
+
         cmd = [
             "claude",
-            "-p",
+            mode_flag,
             "--output-format", "text",
             "--append-system-prompt", VOICE_SYSTEM_PROMPT,
         ]

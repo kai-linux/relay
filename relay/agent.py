@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import random
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -103,17 +104,100 @@ class FallbackAgent(AgentBackend):
         yield AgentEvent(type="result", text=f"All agents failed. Last error: {last_err}")
 
 
-_TOOL_LABELS = {
-    "Read": "I'm reading through the files now",
-    "Write": "I'm writing some code",
-    "Edit": "I'm making some edits",
-    "Bash": "I'm running a command",
-    "Grep": "I'm searching the codebase",
-    "Glob": "I'm looking for the right files",
-    "Agent": "I'm kicking off a sub-task",
-    "WebFetch": "I'm pulling up a web page",
-    "WebSearch": "I'm searching the web for that",
+# ---------------------------------------------------------------------------
+# Combinatorial voice status messages
+# ---------------------------------------------------------------------------
+# Each tool maps to (verbs, objects) tuples.  We pick one verb + one object
+# at random, giving  V × O  unique phrases per tool — hundreds of distinct
+# status messages overall, with zero repetition within a session thanks to
+# the seen_tools gate.
+
+_TOOL_PHRASES: dict[str, tuple[list[str], list[str]]] = {
+    "Read": (
+        ["Reading through", "Looking at", "Checking", "Reviewing",
+         "Scanning", "Pulling up", "Opening", "Inspecting"],
+        ["the files now", "the source code", "what we've got",
+         "the relevant files", "that file", "the code"],
+    ),
+    "Write": (
+        ["Writing", "Putting together", "Drafting", "Creating",
+         "Generating", "Setting up", "Laying down"],
+        ["some code", "a new file", "the implementation",
+         "the code for that", "what's needed", "the changes"],
+    ),
+    "Edit": (
+        ["Making", "Applying", "Working on", "Putting in",
+         "Dropping in", "Tweaking", "Adjusting"],
+        ["some edits", "the changes", "a few modifications",
+         "the updates", "the fix", "the adjustments"],
+    ),
+    "Bash": (
+        ["Running", "Firing off", "Executing", "Kicking off",
+         "Launching", "Spinning up"],
+        ["a command", "a shell command", "something in the terminal",
+         "a quick command", "that in the terminal", "a process"],
+    ),
+    "Grep": (
+        ["Searching", "Scanning", "Combing through", "Looking through",
+         "Hunting through", "Sifting through", "Digging into"],
+        ["the codebase", "the source", "the files",
+         "the code for that", "for matches", "for references"],
+    ),
+    "Glob": (
+        ["Looking for", "Tracking down", "Locating", "Hunting for",
+         "Searching for", "Finding"],
+        ["the right files", "matching files", "the files we need",
+         "what's relevant", "the target files", "the file paths"],
+    ),
+    "Agent": (
+        ["Kicking off", "Spinning up", "Dispatching", "Launching",
+         "Starting", "Handing off to"],
+        ["a sub-task", "a background task", "a helper agent",
+         "a parallel task", "an assistant", "a sub-agent"],
+    ),
+    "WebFetch": (
+        ["Pulling up", "Fetching", "Grabbing", "Loading",
+         "Retrieving", "Opening"],
+        ["a web page", "that page", "the URL", "some info online",
+         "the link", "the resource"],
+    ),
+    "WebSearch": (
+        ["Searching", "Looking up", "Querying", "Checking",
+         "Scouring", "Browsing"],
+        ["the web for that", "the internet", "online for answers",
+         "the web", "for results online", "for that info"],
+    ),
 }
+
+_THINKING_PHRASES: list[str] = [
+    "Let me think about this...",
+    "Thinking it over...",
+    "Give me a moment to consider this...",
+    "Working through this...",
+    "Let me reason through that...",
+    "Mulling this over...",
+    "Processing that...",
+    "Let me work through this...",
+    "Considering the options...",
+    "Turning this over in my mind...",
+    "One moment while I think...",
+    "Let me figure this out...",
+]
+
+
+def _pick_tool_label(tool: str) -> str:
+    """Return a varied status phrase for a tool invocation."""
+    phrases = _TOOL_PHRASES.get(tool)
+    if not phrases:
+        return f"I'm using {tool}"
+    verb = random.choice(phrases[0])
+    obj = random.choice(phrases[1])
+    return f"{verb} {obj}"
+
+
+def _pick_thinking_label() -> str:
+    """Return a varied thinking status phrase."""
+    return random.choice(_THINKING_PHRASES)
 
 
 class ClaudeCodeAgent(AgentBackend):
@@ -235,14 +319,14 @@ class ClaudeCodeAgent(AgentBackend):
             part_type = part.get("type")
 
             if part_type == "thinking":
-                return "Let me think about this..."
+                return _pick_thinking_label()
 
             if part_type == "tool_use":
                 tool = part.get("name", "")
                 if tool in seen_tools:
                     continue
                 seen_tools.add(tool)
-                return _TOOL_LABELS.get(tool, f"I'm using {tool}")
+                return _pick_tool_label(tool)
 
         return None
 
@@ -369,14 +453,11 @@ class CodexAgent(AgentBackend):
             content = msg.get("content", [])
             for part in content:
                 if part.get("type") == "thinking":
-                    return "Thinking..."
+                    return _pick_thinking_label()
 
         if msg_type == "function_call":
             name = msg.get("name", "")
-            label = _TOOL_LABELS.get(name, "")
-            if label:
-                return label
             if name:
-                return f"Using {name}"
+                return _pick_tool_label(name)
 
         return None

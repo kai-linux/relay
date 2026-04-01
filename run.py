@@ -75,12 +75,31 @@ def ensure_certs():
 ensure_venv()
 
 import asyncio  # noqa: E402
+import logging  # noqa: E402
+import ssl  # noqa: E402
 
 from hypercorn.asyncio import serve  # noqa: E402
 from hypercorn.config import Config as HyperConfig  # noqa: E402
 
 from relay.app import create_app_from_config  # noqa: E402
 from relay.config import Config  # noqa: E402
+
+
+class _SSLErrorFilter(logging.Filter):
+    """Suppress harmless SSL teardown errors from Hypercorn.
+
+    Browsers often close TLS connections abruptly (e.g. navigating away,
+    phone locking), which triggers APPLICATION_DATA_AFTER_CLOSE_NOTIFY.
+    This is benign — no requests are lost.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info[1]:
+            exc = record.exc_info[1]
+            if isinstance(exc, ssl.SSLError) and "APPLICATION_DATA" in str(exc):
+                return False
+        return True
+
 
 config = Config()
 app = create_app_from_config(config)
@@ -92,6 +111,9 @@ if __name__ == "__main__":
     hyper.bind = [f"{config.host}:{config.port}"]
     hyper.certfile = cert_file
     hyper.keyfile = key_file
+
+    # Suppress noisy but harmless SSL teardown errors
+    logging.getLogger("hypercorn.error").addFilter(_SSLErrorFilter())
 
     print(f"\n  relay running at https://0.0.0.0:{config.port}")
     print(f"  Accept the self-signed cert warning in your browser.\n")

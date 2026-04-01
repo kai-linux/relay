@@ -41,8 +41,16 @@
 <body class="bg-zinc-950 text-white flex flex-col">
 
     <!-- Header -->
-    <header class="shrink-0 px-6 pt-4 pb-2">
+    <header class="shrink-0 px-6 pt-4 pb-2 flex items-center justify-between">
         <h1 class="text-lg font-medium text-zinc-500 tracking-wide">relay</h1>
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+            <span id="mode-label" class="text-xs text-zinc-600 uppercase tracking-wider">push to talk</span>
+            <div class="relative">
+                <input id="mode-toggle" type="checkbox" class="sr-only peer">
+                <div class="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:bg-emerald-600 transition-colors"></div>
+                <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-zinc-400 rounded-full peer-checked:translate-x-4 peer-checked:bg-white transition-transform"></div>
+            </div>
+        </label>
     </header>
 
     <!-- Transcript -->
@@ -92,6 +100,8 @@
         </div>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

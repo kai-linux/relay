@@ -9,6 +9,10 @@ class RelayClient {
         this.audioChunks = [];
         this.currentAudio = null;
         this.state = "init";
+        this.handsFree = false;
+        this.vad = null;
+        this._keepAliveAudio = null;
+        this._keepAliveCtx = null;
 
         this.els = {
             btn: document.getElementById("record-btn"),
@@ -21,13 +25,17 @@ class RelayClient {
             iconStop: document.getElementById("icon-stop"),
             iconSpinner: document.getElementById("icon-spinner"),
             iconSpeaking: document.getElementById("icon-speaking"),
+            modeToggle: document.getElementById("mode-toggle"),
+            modeLabel: document.getElementById("mode-label"),
         };
 
         this.els.btn.addEventListener("click", () => this.onButtonPress());
+        if (this.els.modeToggle) {
+            this.els.modeToggle.addEventListener("change", () => this.toggleMode());
+        }
     }
 
     async init() {
-        // Check for secure context (HTTPS or localhost)
         if (!window.isSecureContext) {
             this.showError(
                 "HTTPS required for microphone access.\n" +
@@ -36,7 +44,6 @@ class RelayClient {
             return;
         }
 
-        // Check for mediaDevices support
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             this.showError("This browser doesn't support audio recording.");
             return;
@@ -46,6 +53,7 @@ class RelayClient {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true },
             });
+            this.stream = stream;
             this.mediaRecorder = new MediaRecorder(stream, {
                 mimeType: this.pickMimeType(),
             });
@@ -53,6 +61,8 @@ class RelayClient {
                 if (e.data.size > 0) this.audioChunks.push(e.data);
             };
             this.mediaRecorder.onstop = () => this.sendAudio();
+            this.setupMediaSession();
+            this.setupKeepAlive();
             this.setState("ready");
         } catch (err) {
             if (err.name === "NotAllowedError") {
@@ -62,6 +72,139 @@ class RelayClient {
             }
         }
     }
+
+    // ── Mode toggle ──────────────────────────────────────────────
+
+    async toggleMode() {
+        this.handsFree = this.els.modeToggle.checked;
+        if (this.els.modeLabel) {
+            this.els.modeLabel.textContent = this.handsFree ? "hands-free" : "push to talk";
+        }
+
+        if (this.handsFree) {
+            await this.startVAD();
+        } else {
+            this.stopVAD();
+            if (this.state === "ready" || this.state === "recording") {
+                this.setState("ready");
+            }
+        }
+    }
+
+    // ── VAD (voice activity detection) ───────────────────────────
+
+    async startVAD() {
+        if (this.vad) return;
+
+        // @ricky0123/vad-web loaded via CDN in index.html
+        if (typeof vad === "undefined" || !vad.MicVAD) {
+            console.warn("VAD library not loaded, hands-free unavailable");
+            this.handsFree = false;
+            this.els.modeToggle.checked = false;
+            if (this.els.modeLabel) this.els.modeLabel.textContent = "push to talk";
+            return;
+        }
+
+        try {
+            this.vad = await vad.MicVAD.new({
+                stream: this.stream,
+                onSpeechStart: () => {
+                    if (!this.handsFree) return;
+                    // Only start recording if we're in a ready state
+                    if (this.state === "ready") {
+                        this.startRecording();
+                    }
+                },
+                onSpeechEnd: (audio) => {
+                    if (!this.handsFree) return;
+                    if (this.state === "recording") {
+                        this.stopRecording();
+                    }
+                },
+                // Tuning: require a bit of silence before triggering end
+                minSpeechFrames: 5,
+                redemptionFrames: 15,
+            });
+            this.vad.start();
+            this.setState("ready");
+        } catch (err) {
+            console.error("VAD init failed:", err);
+            this.handsFree = false;
+            this.els.modeToggle.checked = false;
+            if (this.els.modeLabel) this.els.modeLabel.textContent = "push to talk";
+        }
+    }
+
+    stopVAD() {
+        if (this.vad) {
+            this.vad.pause();
+            this.vad.destroy();
+            this.vad = null;
+        }
+    }
+
+    // ── Headphone button (MediaSession API) ──────────────────────
+
+    setupMediaSession() {
+        if (!("mediaSession" in navigator)) return;
+
+        // Play/pause actions map to push-to-talk toggle
+        const toggle = () => this.onButtonPress();
+        navigator.mediaSession.setActionHandler("play", toggle);
+        navigator.mediaSession.setActionHandler("pause", toggle);
+        // Some headphones send "stop" on long-press
+        navigator.mediaSession.setActionHandler("stop", toggle);
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: "relay",
+            artist: "Listening",
+        });
+    }
+
+    // ── Background keep-alive ────────────────────────────────────
+
+    setupKeepAlive() {
+        // Play a silent audio loop to prevent iOS/Android from suspending
+        // the tab when it's in the background or screen is off.
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                this._startKeepAlive();
+            } else {
+                this._stopKeepAlive();
+            }
+        });
+    }
+
+    _startKeepAlive() {
+        if (this._keepAliveCtx) return;
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            // Generate a tiny silent buffer
+            const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.loop = true;
+            src.connect(ctx.destination);
+            src.start();
+            this._keepAliveCtx = ctx;
+            this._keepAliveSrc = src;
+        } catch {
+            // Non-critical — best-effort keep-alive
+        }
+    }
+
+    _stopKeepAlive() {
+        if (this._keepAliveSrc) {
+            try { this._keepAliveSrc.stop(); } catch {}
+            this._keepAliveSrc = null;
+        }
+        if (this._keepAliveCtx) {
+            try { this._keepAliveCtx.close(); } catch {}
+            this._keepAliveCtx = null;
+        }
+    }
+
+    // ── Core recording / playback ────────────────────────────────
 
     showError(msg) {
         this.els.emptyText.textContent = msg;
@@ -172,7 +315,7 @@ class RelayClient {
             buffer += decoder.decode(value, { stream: true });
 
             const lines = buffer.split("\n");
-            buffer = lines.pop(); // keep incomplete line in buffer
+            buffer = lines.pop();
 
             for (const line of lines) {
                 if (!line.trim()) continue;
@@ -200,7 +343,6 @@ class RelayClient {
                         this.addMessage("assistant", event.text);
                         break;
                     case "audio":
-                        // Response audio chunk — interrupt status clips on first chunk
                         if (!this.receivedResponseAudio) {
                             this.receivedResponseAudio = true;
                             this.statusQueue = [];
@@ -219,11 +361,12 @@ class RelayClient {
             }
         }
 
-        // Stream ended — if we got response audio, make sure it plays out
         if (!this.receivedResponseAudio && this.state !== "speaking") {
             this.setState("ready");
         }
     }
+
+    // ── Audio queue: status clips ────────────────────────────────
 
     queueStatusClip(base64Data) {
         if (!this.statusQueue) this.statusQueue = [];
@@ -243,6 +386,8 @@ class RelayClient {
         audio.onerror = () => this.playNextStatusClip();
         audio.play().catch(() => this.playNextStatusClip());
     }
+
+    // ── Audio queue: response clips ──────────────────────────────
 
     queueResponseClip(base64Data) {
         if (!this.responseQueue) this.responseQueue = [];
@@ -268,6 +413,8 @@ class RelayClient {
     playAudio(base64Data) {
         this.queueResponseClip(base64Data);
     }
+
+    // ── UI ───────────────────────────────────────────────────────
 
     addMessage(role, text) {
         if (this.els.emptyState) {
@@ -321,17 +468,23 @@ class RelayClient {
         this.els.btn.className =
             "relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none";
 
+        const modePrefix = this.handsFree ? "Hands-free" : "";
+
         switch (state) {
             case "ready":
                 this.els.iconMic.classList.remove("hidden");
                 this.els.btn.classList.add("bg-zinc-800", "border-2", "border-zinc-700");
-                this.els.status.textContent = "Tap to speak";
+                this.els.status.textContent = this.handsFree
+                    ? "Listening... just speak"
+                    : "Tap to speak";
                 break;
             case "recording":
                 this.els.iconStop.classList.remove("hidden");
                 this.els.pulse.classList.remove("hidden");
                 this.els.btn.classList.add("bg-red-600", "border-2", "border-red-500");
-                this.els.status.textContent = "Listening... tap to send";
+                this.els.status.textContent = this.handsFree
+                    ? "Hearing you..."
+                    : "Listening... tap to send";
                 break;
             case "processing":
                 this.els.iconSpinner.classList.remove("hidden");
@@ -353,5 +506,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if ("wakeLock" in navigator) {
         navigator.wakeLock.request("screen").catch(() => {});
+        // Re-acquire wake lock when tab becomes visible again
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && "wakeLock" in navigator) {
+                navigator.wakeLock.request("screen").catch(() => {});
+            }
+        });
     }
 });

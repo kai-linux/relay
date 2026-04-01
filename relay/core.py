@@ -166,9 +166,15 @@ class Relay:
         # Start the agent reader — it runs concurrently while we yield
         agent_task = asyncio.create_task(_read_agent_and_synthesize())
 
-        # Yield events as they arrive from the queue
+        # Yield events as they arrive from the queue.
+        # Send a heartbeat every 15s to keep the connection alive on
+        # mobile browsers that close idle streams.
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15)
+            except asyncio.TimeoutError:
+                yield RelayEvent(event="status", text="Still working on it...")
+                continue
             if event is None:
                 break
             yield event

@@ -108,9 +108,10 @@ class Relay:
         yield RelayEvent(event="status", text="Agent is working...")
 
         # Queue bridges the agent stream reader and the event yielder.
-        # None sentinel signals the agent task is done.
+        # None sentinel signals all work (agent + TTS) is done.
         queue: asyncio.Queue[RelayEvent | None] = asyncio.Queue()
         response_text = ""
+        tts_tasks: list[asyncio.Task] = []
 
         async def _read_agent_and_synthesize():
             """Read agent events and fire off TTS for status updates."""
@@ -126,9 +127,10 @@ class Relay:
                         )
                         # Synthesize audio in a background task so we don't
                         # block reading the next agent event
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             _synthesize_status(agent_event.text)
                         )
+                        tts_tasks.append(task)
                     elif agent_event.type == "result":
                         response_text = agent_event.text
             except Exception as e:
@@ -136,8 +138,11 @@ class Relay:
                 await queue.put(
                     RelayEvent(event="error", text=str(e))
                 )
-            finally:
-                await queue.put(None)
+
+            # Wait for all pending TTS tasks before signalling done
+            if tts_tasks:
+                await asyncio.gather(*tts_tasks, return_exceptions=True)
+            await queue.put(None)
 
         async def _synthesize_status(text: str):
             """TTS a short status clip and push to queue."""

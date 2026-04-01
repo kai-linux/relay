@@ -5,7 +5,7 @@ __version__ = "0.1.0"
 from .core import Relay, RelayResponse
 from .stt import STTProvider, WhisperSTT
 from .tts import TTSProvider, OpenAITTS
-from .agent import AgentBackend, ClaudeCodeAgent, CodexAgent
+from .agent import AgentBackend, AgentError, ClaudeCodeAgent, CodexAgent, FallbackAgent
 from .config import Config
 
 __all__ = [
@@ -16,7 +16,9 @@ __all__ = [
     "TTSProvider",
     "OpenAITTS",
     "AgentBackend",
+    "AgentError",
     "ClaudeCodeAgent",
     "CodexAgent",
+    "FallbackAgent",
     "Config",
 ]

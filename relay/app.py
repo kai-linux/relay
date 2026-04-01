@@ -5,11 +5,16 @@ import uuid
 
 from quart import Quart, jsonify, request
 
-from .agent import ClaudeCodeAgent, CodexAgent
+from .agent import ClaudeCodeAgent, CodexAgent, FallbackAgent
 from .config import Config
 from .core import Relay
 from .stt import WhisperSTT
 from .tts import OpenAITTS
+
+AGENT_REGISTRY = {
+    "claude-code": ClaudeCodeAgent,
+    "codex": CodexAgent,
+}
 
 
 def create_app(relay: Relay, config: Config | None = None) -> Quart:
@@ -57,6 +62,33 @@ def create_app(relay: Relay, config: Config | None = None) -> Quart:
     return app
 
 
+def _build_agent(config: Config):
+    """Build agent from config. Supports comma-separated fallback chains.
+
+    Examples:
+        RELAY_AGENT_BACKEND=claude-code           -> single agent
+        RELAY_AGENT_BACKEND=claude-code,codex      -> claude-code with codex fallback
+    """
+    names = [n.strip() for n in config.agent_backend.split(",")]
+    agents = []
+    for name in names:
+        cls = AGENT_REGISTRY.get(name)
+        if not cls:
+            raise ValueError(
+                f"Unknown agent backend '{name}'. "
+                f"Choose from: {', '.join(AGENT_REGISTRY)}"
+            )
+        agents.append(cls(
+            work_dir=config.work_dir,
+            timeout=config.agent_timeout,
+            skip_permissions=config.agent_skip_permissions,
+        ))
+
+    if len(agents) == 1:
+        return agents[0]
+    return FallbackAgent(agents)
+
+
 def create_app_from_config(config: Config | None = None) -> Quart:
     """Convenience: build everything from config and return a ready-to-run app."""
     config = config or Config()
@@ -68,21 +100,7 @@ def create_app_from_config(config: Config | None = None) -> Quart:
         model=config.tts_model,
         voice=config.tts_voice,
     )
-    agents = {
-        "claude-code": ClaudeCodeAgent,
-        "codex": CodexAgent,
-    }
-    agent_cls = agents.get(config.agent_backend)
-    if not agent_cls:
-        raise ValueError(
-            f"Unknown agent backend '{config.agent_backend}'. "
-            f"Choose from: {', '.join(agents)}"
-        )
-    agent = agent_cls(
-        work_dir=config.work_dir,
-        timeout=config.agent_timeout,
-        skip_permissions=config.agent_skip_permissions,
-    )
+    agent = _build_agent(config)
     relay = Relay(stt=stt, tts=tts, agent=agent)
 
     return create_app(relay, config)

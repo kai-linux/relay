@@ -12,24 +12,37 @@ import sys
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(ROOT_DIR, ".venv")
 VENV_PYTHON = os.path.join(VENV_DIR, "bin", "python")
+STAMP_FILE = os.path.join(VENV_DIR, ".relay_stamp")
+
+
+def _needs_install():
+    """Check if we need to (re)install — compares pyproject.toml mtime to stamp."""
+    if not os.path.exists(VENV_PYTHON):
+        return True
+    if not os.path.exists(STAMP_FILE):
+        return True
+    stamp_mtime = os.path.getmtime(STAMP_FILE)
+    pyproject = os.path.join(ROOT_DIR, "pyproject.toml")
+    if os.path.exists(pyproject) and os.path.getmtime(pyproject) > stamp_mtime:
+        return True
+    return False
 
 
 def ensure_venv():
-    """Create .venv and install the package if not already set up."""
-    if sys.executable == VENV_PYTHON or sys.prefix != sys.base_prefix:
-        return  # already running inside the venv
+    """Create .venv and install the package if needed."""
+    if sys.prefix != sys.base_prefix:
+        return  # already running inside a venv
 
-    installed_marker = os.path.join(VENV_DIR, ".relay_installed")
-    if not os.path.exists(installed_marker):
-        # Clean slate if prior attempt left a broken venv
-        if os.path.exists(VENV_DIR):
-            import shutil
-            shutil.rmtree(VENV_DIR)
-        print("Creating .venv ...")
-        subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+    if _needs_install():
+        if not os.path.exists(VENV_PYTHON):
+            print("Creating .venv ...")
+            subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
         print("Installing relay into .venv ...")
-        subprocess.check_call([VENV_PYTHON, "-m", "pip", "install", "-e", "."])
-        open(installed_marker, "w").close()
+        subprocess.check_call(
+            [VENV_PYTHON, "-m", "pip", "install", "-q", "-e", "."]
+        )
+        # Touch stamp so we don't reinstall until pyproject.toml changes
+        open(STAMP_FILE, "w").close()
 
     # Re-exec this script inside the venv
     os.execv(VENV_PYTHON, [VENV_PYTHON, __file__] + sys.argv[1:])

@@ -1,7 +1,14 @@
 """Agent backends — CLI AI tool integrations."""
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
+
+log = logging.getLogger(__name__)
+
+
+class AgentError(Exception):
+    """Raised when an agent fails in a way that warrants trying a fallback."""
 
 
 class AgentBackend(ABC):
@@ -12,7 +19,10 @@ class AgentBackend(ABC):
 
     @abstractmethod
     async def send(self, message: str, session_id: str) -> str:
-        """Send a message to the agent and return its text response."""
+        """Send a message to the agent and return its text response.
+
+        Raise AgentError if the agent fails and a fallback should be tried.
+        """
         ...
 
 
@@ -24,6 +34,30 @@ VOICE_SYSTEM_PROMPT = (
     "summarize what you did in one to three short sentences. "
     "If you need to share code, keep it to the essential lines only."
 )
+
+
+class FallbackAgent(AgentBackend):
+    """Tries agents in order, falling back to the next on failure."""
+
+    def __init__(self, agents: list[AgentBackend]):
+        if not agents:
+            raise ValueError("FallbackAgent needs at least one agent")
+        self.agents = agents
+
+    async def send(self, message: str, session_id: str) -> str:
+        last_err = None
+        for i, agent in enumerate(self.agents):
+            name = type(agent).__name__
+            try:
+                return await agent.send(message, session_id)
+            except AgentError as e:
+                last_err = e
+                remaining = len(self.agents) - i - 1
+                if remaining:
+                    log.warning("%s failed (%s), trying next backend", name, e)
+                else:
+                    log.error("%s failed (%s), no more backends", name, e)
+        return f"All agents failed. Last error: {last_err}"
 
 
 class ClaudeCodeAgent(AgentBackend):
@@ -60,12 +94,13 @@ class ClaudeCodeAgent(AgentBackend):
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return "The agent timed out. Try a simpler request or increase the timeout."
+            raise AgentError("timed out")
 
         response = stdout.decode().strip()
+        err = stderr.decode().strip()
+
         if proc.returncode != 0 and not response:
-            err = stderr.decode().strip()
-            return f"Agent error: {err}" if err else "Agent returned an error with no output."
+            raise AgentError(err or f"exit code {proc.returncode}")
 
         return response
 
@@ -99,11 +134,12 @@ class CodexAgent(AgentBackend):
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return "The agent timed out. Try a simpler request or increase the timeout."
+            raise AgentError("timed out")
 
         response = stdout.decode().strip()
+        err = stderr.decode().strip()
+
         if proc.returncode != 0 and not response:
-            err = stderr.decode().strip()
-            return f"Agent error: {err}" if err else "Agent returned an error with no output."
+            raise AgentError(err or f"exit code {proc.returncode}")
 
         return response

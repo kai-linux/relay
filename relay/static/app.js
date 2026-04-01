@@ -1,8 +1,5 @@
 /**
  * relay — voice client
- *
- * Handles audio recording, server communication, and response playback.
- * Designed for mobile walk-and-talk usage.
  */
 
 class RelayClient {
@@ -11,13 +8,14 @@ class RelayClient {
         this.mediaRecorder = null;
         this.audioChunks = [];
         this.currentAudio = null;
-        this.state = "init"; // init | ready | recording | processing | speaking
+        this.state = "init";
 
         this.els = {
             btn: document.getElementById("record-btn"),
             status: document.getElementById("status"),
             transcript: document.getElementById("transcript"),
             emptyState: document.getElementById("empty-state"),
+            emptyText: document.getElementById("empty-text"),
             pulse: document.getElementById("pulse"),
             iconMic: document.getElementById("icon-mic"),
             iconStop: document.getElementById("icon-stop"),
@@ -29,6 +27,21 @@ class RelayClient {
     }
 
     async init() {
+        // Check for secure context (HTTPS or localhost)
+        if (!window.isSecureContext) {
+            this.showError(
+                "HTTPS required for microphone access.\n" +
+                "Access this page over https:// or localhost."
+            );
+            return;
+        }
+
+        // Check for mediaDevices support
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.showError("This browser doesn't support audio recording.");
+            return;
+        }
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true },
@@ -41,10 +54,22 @@ class RelayClient {
             };
             this.mediaRecorder.onstop = () => this.sendAudio();
             this.setState("ready");
-        } catch {
-            this.setState("ready");
-            this.els.status.textContent = "Microphone access needed";
+        } catch (err) {
+            if (err.name === "NotAllowedError") {
+                this.showError("Microphone permission denied.\nAllow access and reload.");
+            } else {
+                this.showError("Could not access microphone:\n" + err.message);
+            }
         }
+    }
+
+    showError(msg) {
+        this.els.emptyText.textContent = msg;
+        this.els.emptyText.classList.remove("text-zinc-600");
+        this.els.emptyText.classList.add("text-red-400");
+        this.els.status.textContent = "";
+        this.els.btn.disabled = true;
+        this.els.btn.classList.add("opacity-30");
     }
 
     pickMimeType() {
@@ -72,10 +97,7 @@ class RelayClient {
     }
 
     startRecording() {
-        if (!this.mediaRecorder) {
-            this.els.status.textContent = "Microphone access needed";
-            return;
-        }
+        if (!this.mediaRecorder) return;
         this.audioChunks = [];
         this.mediaRecorder.start();
         this.setState("recording");
@@ -100,7 +122,6 @@ class RelayClient {
         const mimeType = this.mediaRecorder.mimeType || "audio/webm";
         const blob = new Blob(this.audioChunks, { type: mimeType });
 
-        // Skip very short recordings (likely accidental taps)
         if (blob.size < 1000) {
             this.setState("ready");
             return;
@@ -129,15 +150,9 @@ class RelayClient {
                 return;
             }
 
-            // Show transcript
-            if (data.transcript) {
-                this.addMessage("user", data.transcript);
-            }
-            if (data.response) {
-                this.addMessage("assistant", data.response);
-            }
+            if (data.transcript) this.addMessage("user", data.transcript);
+            if (data.response) this.addMessage("assistant", data.response);
 
-            // Play response audio
             if (data.audio_base64) {
                 this.playAudio(data.audio_base64);
             } else {
@@ -162,14 +177,12 @@ class RelayClient {
             this.setState("ready");
         };
         audio.play().catch(() => {
-            // Autoplay blocked — user will need to tap again
             this.currentAudio = null;
             this.setState("ready");
         });
     }
 
     addMessage(role, text) {
-        // Remove empty state on first message
         if (this.els.emptyState) {
             this.els.emptyState.remove();
             this.els.emptyState = null;
@@ -212,16 +225,14 @@ class RelayClient {
     setState(state) {
         this.state = state;
 
-        // Reset all icons
         this.els.iconMic.classList.add("hidden");
         this.els.iconStop.classList.add("hidden");
         this.els.iconSpinner.classList.add("hidden");
         this.els.iconSpeaking.classList.add("hidden");
         this.els.pulse.classList.add("hidden");
 
-        // Reset button style
         this.els.btn.className =
-            "relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none";
+            "relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none";
 
         switch (state) {
             case "ready":
@@ -249,12 +260,10 @@ class RelayClient {
     }
 }
 
-// Boot
 document.addEventListener("DOMContentLoaded", () => {
     const relay = new RelayClient();
     relay.init();
 
-    // Request wake lock to prevent screen dimming during use
     if ("wakeLock" in navigator) {
         navigator.wakeLock.request("screen").catch(() => {});
     }

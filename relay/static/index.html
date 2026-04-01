@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#09090b">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -10,16 +10,25 @@
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        html, body {
+            height: 100%;
+            height: 100dvh;
+            overflow: hidden;
+        }
+        body {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
         @keyframes pulse-ring {
             0% { transform: scale(1); opacity: 0.6; }
-            100% { transform: scale(1.4); opacity: 0; }
+            100% { transform: scale(1.5); opacity: 0; }
         }
         .pulse-ring {
             animation: pulse-ring 1.2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
         }
         @keyframes speaking {
-            0%, 100% { height: 12px; }
-            50% { height: 28px; }
+            0%, 100% { height: 14px; }
+            50% { height: 32px; }
         }
         .speaking-bar {
             animation: speaking 0.6s ease-in-out infinite;
@@ -29,56 +38,55 @@
         .speaking-bar:nth-child(4) { animation-delay: 0.1s; }
     </style>
 </head>
-<body class="bg-zinc-950 text-white min-h-screen flex flex-col select-none">
+<body class="bg-zinc-950 text-white flex flex-col select-none">
 
     <!-- Header -->
-    <header class="pt-safe px-6 pt-12 pb-4">
-        <h1 class="text-lg font-medium text-zinc-400 tracking-wide">relay</h1>
+    <header class="shrink-0 px-6 pt-4 pb-2">
+        <h1 class="text-lg font-medium text-zinc-500 tracking-wide">relay</h1>
     </header>
 
     <!-- Transcript -->
-    <main id="transcript" class="flex-1 overflow-y-auto px-6 space-y-4 pb-4">
+    <main id="transcript" class="flex-1 overflow-y-auto px-6 space-y-4 py-4">
         <div id="empty-state" class="flex items-center justify-center h-full">
-            <p class="text-zinc-600 text-center text-sm">
-                Tap the button below to start talking.<br>
+            <p id="empty-text" class="text-zinc-600 text-center text-sm leading-relaxed">
+                Tap the button to start talking.<br>
                 Your voice gets relayed to the agent.
             </p>
         </div>
     </main>
 
     <!-- Controls -->
-    <footer class="pb-safe px-6 pb-10 pt-4 flex flex-col items-center gap-3">
-        <p id="status" class="text-sm text-zinc-500 h-5">Ready</p>
+    <footer class="shrink-0 px-6 pb-8 pt-4 flex flex-col items-center gap-4">
+        <p id="status" class="text-sm text-zinc-500 h-5"></p>
 
-        <!-- Record button -->
         <div class="relative">
             <div id="pulse" class="absolute inset-0 rounded-full bg-red-500 pulse-ring hidden"></div>
             <button
                 id="record-btn"
-                class="relative w-20 h-20 rounded-full bg-zinc-800 border-2 border-zinc-700 flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none"
+                class="relative w-24 h-24 rounded-full bg-zinc-800 border-2 border-zinc-700 flex items-center justify-center transition-all duration-200 active:scale-95 focus:outline-none"
                 aria-label="Record"
             >
-                <!-- Mic icon (default) -->
-                <svg id="icon-mic" class="w-8 h-8 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <!-- Mic icon -->
+                <svg id="icon-mic" class="w-10 h-10 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                     <path stroke-linecap="round" stroke-linejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/>
                     <line x1="12" y1="19" x2="12" y2="23"/>
                     <line x1="8" y1="23" x2="16" y2="23"/>
                 </svg>
-                <!-- Stop icon (recording) -->
-                <div id="icon-stop" class="w-6 h-6 rounded-sm bg-red-500 hidden"></div>
-                <!-- Spinner (processing) -->
-                <svg id="icon-spinner" class="w-8 h-8 text-zinc-400 animate-spin hidden" fill="none" viewBox="0 0 24 24">
+                <!-- Stop icon -->
+                <div id="icon-stop" class="w-7 h-7 rounded-sm bg-red-500 hidden"></div>
+                <!-- Spinner -->
+                <svg id="icon-spinner" class="w-10 h-10 text-zinc-400 animate-spin hidden" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                 </svg>
                 <!-- Speaking bars -->
                 <div id="icon-speaking" class="hidden flex items-center gap-1">
-                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:12px"></div>
-                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:12px"></div>
-                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:12px"></div>
-                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:12px"></div>
-                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:12px"></div>
+                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:14px"></div>
+                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:14px"></div>
+                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:14px"></div>
+                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:14px"></div>
+                    <div class="w-1 bg-white rounded-full speaking-bar" style="height:14px"></div>
                 </div>
             </button>
         </div>

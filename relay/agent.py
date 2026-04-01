@@ -9,6 +9,9 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
+# 4 MB — stream-json result lines can be very large for long agent responses
+_STREAM_BUFFER_LIMIT = 4 * 1024 * 1024
+
 
 class AgentError(Exception):
     """Raised when an agent fails in a way that warrants trying a fallback."""
@@ -151,6 +154,7 @@ class ClaudeCodeAgent(AgentBackend):
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_STREAM_BUFFER_LIMIT,
         )
 
         result_text = ""
@@ -279,6 +283,7 @@ class CodexAgent(AgentBackend):
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_STREAM_BUFFER_LIMIT,
         )
 
         result_text = ""

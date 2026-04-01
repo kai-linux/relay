@@ -38,7 +38,7 @@ class Config:
         )
     )
     agent_timeout: int = field(
-        default_factory=lambda: int(os.environ.get("RELAY_AGENT_TIMEOUT", "300"))
+        default_factory=lambda: int(os.environ.get("RELAY_AGENT_TIMEOUT", "600"))
     )
     # Server
     host: str = field(

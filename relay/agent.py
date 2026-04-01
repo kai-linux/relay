@@ -242,6 +242,7 @@ class ClaudeCodeAgent(AgentBackend):
         )
 
         result_text = ""
+        last_assistant_text = ""
         seen_tools: set[str] = set()
 
         try:
@@ -278,17 +279,34 @@ class ClaudeCodeAgent(AgentBackend):
                 if status:
                     yield AgentEvent(type="status", text=status)
 
+                # Capture the last assistant text as a fallback — if the
+                # process is killed before the result line, we still have
+                # the response.
+                if msg.get("type") == "assistant":
+                    for part in msg.get("message", {}).get("content", []):
+                        if part.get("type") == "text" and part.get("text"):
+                            last_assistant_text = part["text"]
+
                 if msg.get("type") == "result":
                     result_text = msg.get("result", result_text)
 
         except AgentError:
-            raise
+            if last_assistant_text and not result_text:
+                log.warning("Agent timed out but had partial response, using it")
+                result_text = last_assistant_text
+            else:
+                raise
         except Exception as e:
             proc.kill()
             await proc.wait()
             raise AgentError(str(e))
 
         await proc.wait()
+
+        # If we got no result line but have assistant text, use it
+        if not result_text and last_assistant_text:
+            log.info("No result line, falling back to last assistant text")
+            result_text = last_assistant_text
 
         # If -c failed (no prior conversation), fall back to -p
         if not result_text and proc.returncode != 0 and continue_mode:

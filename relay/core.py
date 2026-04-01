@@ -113,6 +113,18 @@ class Relay:
         response_text = ""
         tts_tasks: list[asyncio.Task] = []
 
+        async def _synthesize_status(text: str):
+            """TTS a short status clip and push to queue."""
+            try:
+                clip = await self.tts.synthesize(text)
+                await queue.put(RelayEvent(
+                    event="status_audio",
+                    text=text,
+                    audio_base64=base64.b64encode(clip).decode(),
+                ))
+            except Exception:
+                pass  # non-critical
+
         async def _read_agent_and_synthesize():
             """Read agent events and fire off TTS for status updates."""
             nonlocal response_text
@@ -144,17 +156,12 @@ class Relay:
                 await asyncio.gather(*tts_tasks, return_exceptions=True)
             await queue.put(None)
 
-        async def _synthesize_status(text: str):
-            """TTS a short status clip and push to queue."""
-            try:
-                clip = await self.tts.synthesize(text)
-                await queue.put(RelayEvent(
-                    event="status_audio",
-                    text=text,
-                    audio_base64=base64.b64encode(clip).decode(),
-                ))
-            except Exception:
-                pass  # non-critical
+        # Synthesize "Agent is working..." immediately so the user hears
+        # something right away, before the CLI even starts up.
+        initial_tts = asyncio.create_task(
+            _synthesize_status("Agent is working...")
+        )
+        tts_tasks.append(initial_tts)
 
         # Start the agent reader — it runs concurrently while we yield
         agent_task = asyncio.create_task(_read_agent_and_synthesize())
